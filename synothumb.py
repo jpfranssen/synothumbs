@@ -18,7 +18,12 @@
 # ToDo:
 #       add more raw formats
 #       add more movie formats
-import os,sys,Image,Queue,threading,time,subprocess,shlex,ImageChops
+import os,sys,Queue,threading,time,subprocess,shlex
+
+try:
+    from PIL import Image, ImageChops
+except:
+    print "Could not locate pil.image"
 
 try:
     from cStringIO import StringIO
@@ -31,7 +36,8 @@ except:
 #########################################################################
 NumOfThreads=8  # Number of threads
 startTime=time.time()
-imageExtensions=['.jpg','.png','.jpeg','.tif','.bmp','.cr2'] #possibly add other raw types?
+imageExtensions=['.jpg','.png','.jpeg','.tif','.bmp','.cr2'] #possibly add other raw types? , '.nef'
+imageRawExtensions=['.cr2','.nef']
 videoExtensions=['.mov','.m4v','mp4']
 xlName="SYNOPHOTO_THUMB_XL.jpg" ; xlSize=(1280,1280) #XtraLarge
 lName="SYNOPHOTO_THUMB_L.jpg" ; lSize=(800,800) #Large
@@ -39,6 +45,7 @@ bName="SYNOPHOTO_THUMB_B.jpg" ; bSize=(640,640) #Big
 mName="SYNOPHOTO_THUMB_M.jpg" ; mSize=(320,320) #Medium
 sName="SYNOPHOTO_THUMB_S.jpg" ; sSize=(160,160) #Small
 pName="SYNOPHOTO_THUMB_PREVIEW.jpg" ; pSize=(120,160) #Preview, keep ratio, pad with black
+mp4Name="SYNOPHOTO_FILM_M.mp4" ; mp4Size=(640,480) #480p size, same as photostation
 
 #########################################################################
 # Images Class
@@ -58,56 +65,58 @@ class convertImage(threading.Thread):
                 if os.path.isdir(self.thumbDir) != 1:
                     try:os.makedirs(self.thumbDir)
                     except:continue
-                
-                #Following if statements converts raw images using dcraw first
-                if os.path.splitext(self.imagePath)[1].lower() == ".cr2":
+                                
+                #Following statements converts raw images using dcraw first
+                ext=os.path.splitext(self.imagePath)[1].lower() # get raw extension
+                if any(x in ext for x in imageRawExtensions):                
+                #if os.path.splitext(self.imagePath)[1].lower() == ".cr2":
                     self.dcrawcmd = "dcraw -c -b 8 -q 0 -w -H 5 '%s'" % self.imagePath
                     self.dcraw_proc = subprocess.Popen(shlex.split(self.dcrawcmd), stdout=subprocess.PIPE)
                     self.raw = StringIO(self.dcraw_proc.communicate()[0])
                     self.image=Image.open(self.raw)
                 else:
                     self.image=Image.open(self.imagePath)
-
+                
                 ###### Check image orientation and rotate if necessary
                 ## code adapted from: http://www.lifl.fr/~riquetd/auto-rotating-pictures-using-pil.html
                 self.exif = self.image._getexif()
-    
-                if not self.exif:
-                    return False
-            
-                self.orientation_key = 274 # cf ExifTags
-                if self.orientation_key in self.exif:
-                    self.orientation = self.exif[self.orientation_key]
-            
-                    rotate_values = {
-                        3: 180,
-                        6: 270,
-                        8: 90
-                    }
-            
-                    if self.orientation in rotate_values:
-                        self.image=self.image.rotate(rotate_values[self.orientation])
-
-                #### end of orientation part
-
+                    
+                # check exif  if none exists then move on        
+                if self.exif:                
+                        self.orientation_key = 274 # cf ExifTags
+                        if self.orientation_key in self.exif:
+                            self.orientation = self.exif[self.orientation_key]
+                    
+                            rotate_values = {
+                                3: 180,
+                                6: 270,
+                                8: 90
+                            }
+                    
+                            if self.orientation in rotate_values:
+                                self.image=self.image.rotate(rotate_values[self.orientation])
+                
+                #### end of orientation part                                                 
+                        
                 self.image.thumbnail(xlSize, Image.ANTIALIAS)
-                self.image.save(os.path.join(self.thumbDir,xlName), quality=90)
+                self.image.save(os.path.join(self.thumbDir,xlName), quality=90)                
                 self.image.thumbnail(lSize, Image.ANTIALIAS)
-                self.image.save(os.path.join(self.thumbDir,lName), quality=90)
+                self.image.save(os.path.join(self.thumbDir,lName), quality=90)                
                 self.image.thumbnail(bSize, Image.ANTIALIAS)
-                self.image.save(os.path.join(self.thumbDir,bName), quality=90)
+                self.image.save(os.path.join(self.thumbDir,bName), quality=90)                
                 self.image.thumbnail(mSize, Image.ANTIALIAS)
-                self.image.save(os.path.join(self.thumbDir,mName), quality=90)
+                self.image.save(os.path.join(self.thumbDir,mName), quality=90)                
                 self.image.thumbnail(sSize, Image.ANTIALIAS)
-                self.image.save(os.path.join(self.thumbDir,sName), quality=90)
+                self.image.save(os.path.join(self.thumbDir,sName), quality=90)                
                 self.image.thumbnail(pSize, Image.ANTIALIAS)
                 # pad out image
-                self.image_size = self.image.size
+                self.image_size = self.image.size           
                 self.preview_img = self.image.crop((0, 0, pSize[0], pSize[1]))
                 self.offset_x = max((pSize[0] - self.image_size[0]) / 2, 0)
                 self.offset_y = max((pSize[1] - self.image_size[1]) / 2, 0)
                 self.preview_img = ImageChops.offset(self.preview_img, self.offset_x, self.offset_y)
                 self.preview_img.save(os.path.join(self.thumbDir,pName), quality=90)
+            
             self.queueIMG.task_done()
 
 #########################################################################
@@ -139,7 +148,8 @@ class convertVideo(threading.Thread):
                     except:continue
 		# Check video conversion command and convert video to flv
                 if self.is_tool("ffmpeg"):
-			self.ffmpegcmd = "ffmpeg -loglevel panic -i '%s' -y -ar 44100 -r 12 -ac 2 -f flv -qscale 5 -s 320x180 -aspect 320:180 '%s/SYNOPHOTO:FILM.flv'" % (self.videoPath,self.thumbDir) # ffmpeg replaced by avconv on ubuntu
+                        self.ffmpegcmd = "ffmpeg -loglevel panic -i '{0}' -f mp4 -vcodec libx264 -preset fast -profile:v main -acodec aac -strict -2 -s {3}x{4} -aspect {3}:{4} '{1}/{2}'".format(self.videoPath, self.thumbDir, mp4Name, mp4Size[0], mp4Size[1])
+			# self.ffmpegcmd = "ffmpeg -loglevel panic -i '%s' -y -ar 44100 -r 12 -ac 2 -f flv -qscale 5 -s 320x180 -aspect 320:180 '%s/SYNOPHOTO:FILM.flv'" % (self.videoPath,self.thumbDir) # ffmpeg replaced by avconv on ubuntu
                 elif self.is_tool("avconv"):
 			self.ffmpegcmd = "avconv -loglevel panic -i '%s' -y -ar 44100 -r 12 -ac 2 -f flv -qscale 5 -s 320x180 -aspect 320:180 '%s/SYNOPHOTO:FILM.flv'" % (self.videoPath,self.thumbDir)
                 else: return False
@@ -153,13 +163,43 @@ class convertVideo(threading.Thread):
                 elif self.is_tool("avconv"):
 			self.ffmpegcmdThumb = "avconv -loglevel panic -i '%s' -y -an -ss 00:00:03 -an -r 1 -vframes 1 '%s'" % (self.videoPath,self.tempThumb)
                 else: return False
+                
+                print "[+] Video converting done for %s" % (self.videoPath)
+                
                 self.ffmpegThumbproc = subprocess.Popen(shlex.split(self.ffmpegcmdThumb), stdout=subprocess.PIPE)
                 self.ffmpegThumbproc.communicate()[0]
-                self.image=Image.open(self.tempThumb)
-                self.image.thumbnail(xlSize)
-                self.image.save(os.path.join(self.thumbDir,xlName))
-                self.image.thumbnail(mSize)
-                self.image.save(os.path.join(self.thumbDir,mName))
+                try:
+                        # when the video is shorter than 3 seconds the above ffmpeg code wont work
+                        self.image=Image.open(self.tempThumb)
+                
+                        self.image.thumbnail(xlSize, Image.ANTIALIAS)
+                        self.image.save(os.path.join(self.thumbDir,xlName), quality=90)
+                        self.image.thumbnail(lSize, Image.ANTIALIAS)
+                        self.image.save(os.path.join(self.thumbDir,lName), quality=90)
+                        self.image.thumbnail(bSize, Image.ANTIALIAS)
+                        self.image.save(os.path.join(self.thumbDir,bName), quality=90)
+                        self.image.thumbnail(mSize, Image.ANTIALIAS)
+                        self.image.save(os.path.join(self.thumbDir,mName), quality=90)
+                        self.image.thumbnail(sSize, Image.ANTIALIAS)
+                        self.image.save(os.path.join(self.thumbDir,sName), quality=90)
+                        self.image.thumbnail(pSize, Image.ANTIALIAS)
+                        
+                        # pad out image
+                        self.image_size = self.image.size
+                        self.preview_img = self.image.crop((0, 0, pSize[0], pSize[1]))
+                        self.offset_x = max((pSize[0] - self.image_size[0]) / 2, 0)
+                        self.offset_y = max((pSize[1] - self.image_size[1]) / 2, 0)
+                        self.preview_img = ImageChops.offset(self.preview_img, self.offset_x, self.offset_y)
+                        self.preview_img.save(os.path.join(self.thumbDir,pName), quality=90)
+                        
+                        print "[+] Video thumbnail generation done for %s" % (self.videoPath)
+                except:
+                        print "Could not generate video thumbnail for %s" % (self.videoPath)
+                        
+                #self.image.thumbnail(xlSize)
+                #self.image.save(os.path.join(self.thumbDir,xlName))
+                #self.image.thumbnail(mSize)
+                #self.image.save(os.path.join(self.thumbDir,mName))
             
             self.queueVID.task_done()
 
@@ -235,4 +275,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
